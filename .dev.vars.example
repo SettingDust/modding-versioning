@@ -1,0 +1,7 @@
+# Local development secrets — copy to .dev.vars and fill in values.
+# .dev.vars is gitignored; never commit actual secrets.
+
+GITHUB_TOKEN=
+CURSEFORGE_API_KEY=
+ACCESS_TOKEN=
+PARSE_REQUIRES_AUTH=

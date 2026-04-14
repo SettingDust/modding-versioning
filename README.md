@@ -113,7 +113,8 @@ library("mixin-fabric", "net.fabricmc", "sponge-mixin")
 
 ```
 src/
-  index.ts        — Hono app / route handlers
+  index.tsx       — Hono app / route handlers
+  dashboard.tsx   — TSX dashboard document component (SSR to HTML string)
   checker.ts      — Main orchestration + SSE stream
   parser.ts       — Gradle build-script / TOML parser
   detector.ts     — Source detection + dep grouping

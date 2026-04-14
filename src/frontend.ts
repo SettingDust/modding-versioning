@@ -4,7 +4,7 @@
 // CSS
 // ---------------------------------------------------------------------------
 
-const CSS = `
+export const CSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
     --bg: #0f1117;
@@ -129,7 +129,7 @@ const CSS = `
 // JavaScript (runs in browser)
 // ---------------------------------------------------------------------------
 
-const JS = `
+export const JS = `
 const API = ''
 
 let token = localStorage.getItem('mvd_token') || ''
@@ -145,6 +145,33 @@ function openDialog(id) {
   dlg.addEventListener('click', function onBdClick(e) {
     if (e.target === dlg) { dlg.close(); dlg.removeEventListener('click', onBdClick) }
   }, { once: false })
+}
+
+function closeDialog(id) {
+  document.getElementById(id)?.close()
+}
+
+function bindStaticHandlers() {
+  document.getElementById('btn-open-settings')?.addEventListener('click', () => openDialog('dlg-settings'))
+  document.getElementById('btn-open-add')?.addEventListener('click', () => openDialog('dlg-add'))
+
+  document.getElementById('btn-close-settings-x')?.addEventListener('click', () => closeDialog('dlg-settings'))
+  document.getElementById('btn-close-settings')?.addEventListener('click', () => closeDialog('dlg-settings'))
+  document.getElementById('btn-save-token')?.addEventListener('click', applyAuth)
+
+  document.getElementById('btn-close-add-x')?.addEventListener('click', () => closeDialog('dlg-add'))
+  document.getElementById('btn-close-add')?.addEventListener('click', () => closeDialog('dlg-add'))
+  document.getElementById('btn-add-repo')?.addEventListener('click', addRepo)
+  document.getElementById('dlg-add-repo')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') addRepo()
+  })
+
+  document.getElementById('btn-close-set-repo-x')?.addEventListener('click', () => closeDialog('dlg-set-repo'))
+  document.getElementById('btn-close-set-repo')?.addEventListener('click', () => closeDialog('dlg-set-repo'))
+  document.getElementById('btn-save-set-repo')?.addEventListener('click', saveSetRepo)
+  document.getElementById('dlg-sr-url')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveSetRepo()
+  })
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -333,7 +360,20 @@ async function checkRepo(owner, repo) {
       if (slot.status === 'loading') {
         es.close()
         slot.status = 'error'
-        slot.error = 'Stream connection failed'
+        let message = 'Stream connection failed'
+        if (ev instanceof MessageEvent && typeof ev.data === 'string' && ev.data.trim()) {
+          try {
+            const payload = JSON.parse(ev.data)
+            if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+              message = payload.message
+            } else {
+              message = ev.data
+            }
+          } catch {
+            message = ev.data
+          }
+        }
+        slot.error = message
         scheduleRender()
         resolve()
       }
@@ -564,127 +604,7 @@ function variantSuffix(name, logicalName) {
   return artifact.startsWith(logArt) ? artifact.slice(logArt.length).replace(/^[-_]/, '') || artifact : artifact
 }
 
+bindStaticHandlers()
 initAuth()
 loadRepos()
 `
-
-// ---------------------------------------------------------------------------
-// Public renderDashboard()
-// ---------------------------------------------------------------------------
-
-/**
- * Returns a complete HTML page for the dashboard.
- * The page is fully self-contained (no external scripts or stylesheets).
- */
-export function renderDashboard(): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mod Dependency Dashboard</title>
-<style>${CSS}</style>
-</head>
-<body>
-
-<!-- ── Header ─────────────────────────────────────────────────── -->
-<header>
-  <h1>🧱 Mod Dependency Dashboard</h1>
-  <div class="header-actions">
-    <span class="token-dot" title="Token indicator — green when token is set"></span>
-    <button class="icon-btn" onclick="openDialog('dlg-settings')">⚙ Settings</button>
-    <button class="icon-btn" onclick="openDialog('dlg-add')">＋ Add Repo</button>
-  </div>
-</header>
-
-<!-- ── Settings dialog ────────────────────────────────────────── -->
-<dialog id="dlg-settings">
-  <div class="dlg-header">
-    <h3>Settings</h3>
-    <button class="dlg-close" onclick="document.getElementById('dlg-settings').close()">✕</button>
-  </div>
-  <div class="dlg-body">
-    <p class="dlg-hint">Paste your write token to enable adding / removing repos and saving overrides.</p>
-    <div class="dlg-field">
-      <label for="dlg-token-input">Access token</label>
-      <input id="dlg-token-input" type="password" placeholder="Paste token…" autocomplete="off">
-    </div>
-    <div class="dlg-actions">
-      <span id="dlg-token-status" class="msg"></span>
-      <button class="secondary" onclick="document.getElementById('dlg-settings').close()">Close</button>
-      <button onclick="applyAuth()">Save</button>
-    </div>
-  </div>
-</dialog>
-
-<!-- ── Add repo dialog ────────────────────────────────────────── -->
-<dialog id="dlg-add">
-  <div class="dlg-header">
-    <h3>Add Repository</h3>
-    <button class="dlg-close" onclick="document.getElementById('dlg-add').close()">✕</button>
-  </div>
-  <div class="dlg-body">
-    <div class="dlg-field">
-      <label for="dlg-add-owner">Owner</label>
-      <input id="dlg-add-owner" placeholder="e.g. octocat" autocomplete="off">
-    </div>
-    <div class="dlg-field">
-      <label for="dlg-add-repo">Repository</label>
-      <input id="dlg-add-repo" placeholder="e.g. my-mod"  autocomplete="off"
-             onkeydown="if(event.key==='Enter') addRepo()">
-    </div>
-    <div class="dlg-actions">
-      <span id="dlg-add-err" class="msg err"></span>
-      <button class="secondary" onclick="document.getElementById('dlg-add').close()">Cancel</button>
-      <button onclick="addRepo()">Add</button>
-    </div>
-  </div>
-</dialog>
-
-<main>
-
-  <!-- Repo list -->
-  <section>
-    <h2>Repositories</h2>
-    <div id="repo-grid" class="repo-grid"></div>
-  </section>
-
-  <!-- Overrides → Set Repo dialog -->
-  <dialog id="dlg-set-repo">
-    <div class="dlg-header">
-      <h3>Set Maven Repository</h3>
-      <button class="dlg-close" onclick="document.getElementById('dlg-set-repo').close()">✕</button>
-    </div>
-    <div class="dlg-body">
-      <p class="dlg-hint">Override the Maven repository URL for: <strong id="dlg-sr-dep-label"></strong></p>
-      <input type="hidden" id="dlg-sr-dep">
-      <input type="hidden" id="dlg-sr-owner">
-      <input type="hidden" id="dlg-sr-repo">
-      <div class="dlg-field">
-        <label for="dlg-sr-url">Maven repository base URL</label>
-        <input id="dlg-sr-url" placeholder="https://maven.example.com/repo" autocomplete="off"
-               onkeydown="if(event.key==='Enter') saveSetRepo()">
-      </div>
-      <div class="dlg-actions">
-        <span id="dlg-sr-msg" class="msg"></span>
-        <button class="secondary" onclick="document.getElementById('dlg-set-repo').close()">Cancel</button>
-        <button onclick="saveSetRepo()">Save &amp; re-check</button>
-      </div>
-    </div>
-  </dialog>
-
-  <!-- Results -->
-  <section>
-    <div class="results-header">
-      <h2>Dependencies</h2>
-      <span id="results-repo-label" class="repo-label"></span>
-      <span id="results-ctx"></span>
-    </div>
-    <div id="results"></div>
-  </section>
-
-</main>
-<script>${JS}</script>
-</body>
-</html>`
-}

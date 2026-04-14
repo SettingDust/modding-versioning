@@ -1,5 +1,5 @@
 name = "modding-versioning"
-main = "src/index.ts"
+main = "src/index.tsx"
 compatibility_date = "2024-11-01"
 
 [[kv_namespaces]]
@@ -15,3 +15,18 @@ id = "4fd2ad2ed5b04b48bb98b444ce43c153"
 # ACCESS_TOKEN       = ""  # Shared secret to protect write operations (POST/DELETE /api/repos)
 #                          # If unset, write operations are open to everyone.
 # PARSE_REQUIRES_AUTH = "" # Set to "true" to require ACCESS_TOKEN on /api/parse and /api/check
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1

@@ -10,7 +10,7 @@ import { getLatestFabricLoader } from './sources/fabric.ts'
 import { getLatestMavenVersion } from './sources/maven.ts'
 import { getLatestModrinthVersion } from './sources/modrinth.ts'
 import { getLatestCurseForgeVersion } from './sources/curseforge.ts'
-import { renderDashboard } from './frontend.ts'
+import { renderDashboard } from './dashboard.tsx'
 
 const app = new Hono<{ Bindings: Env }>()
 

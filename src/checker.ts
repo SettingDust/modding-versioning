@@ -131,9 +131,11 @@ async function resolveLatestVersion(
   fallbackRepos: string[],
 ): Promise<string | null> {
   const cache = env.VERSION_CACHE
-  // Include context in cache key so different MC versions don't share results
+  // Include context and dep-specific coordinates in cache key.
+  // This avoids cross-pollinating results between same identifier queried in
+  // different contexts (e.g. different currentVersion suffixes or mapped repos).
   const ctxSuffix = `${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
-  const cacheKey = `version:${dep.source}:${dep.identifier}:${ctxSuffix}`
+  const cacheKey = `version:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctxSuffix}`
   const TTL = 3600 // 1 hour
 
   return cachedFetch<string | null>(cache, cacheKey, TTL, async () => {
@@ -392,9 +394,19 @@ export async function checkRepo(
   if (!setup) return null
   const { ctx, deps, fallbackRepos } = setup
 
+  const inFlight = new Map<string, Promise<string | null>>()
+  function resolveLatestVersionDedup(dep: VersionCheckResult): Promise<string | null> {
+    const key = `version:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
+    const existing = inFlight.get(key)
+    if (existing) return existing
+    const p = resolveLatestVersion(dep, env, ctx, fallbackRepos).finally(() => inFlight.delete(key))
+    inFlight.set(key, p)
+    return p
+  }
+
   await Promise.all(
     deps.map(async dep => {
-      dep.latestVersion = await resolveLatestVersion(dep, env, ctx, fallbackRepos)
+      dep.latestVersion = await resolveLatestVersionDedup(dep)
       dep.upToDate = dep.latestVersion !== null ? dep.currentVersion === dep.latestVersion : null
     }),
   )
@@ -453,16 +465,29 @@ export function checkRepoStream(
         const { ctx, deps, fallbackRepos } = setup
         emit(controller, 'context', { context: ctx, total: deps.length })
 
+        const inFlight = new Map<string, Promise<string | null>>()
+        function resolveLatestVersionDedup(dep: VersionCheckResult): { promise: Promise<string | null>; isNew: boolean } {
+          const key = `version:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
+          const existing = inFlight.get(key)
+          if (existing) return { promise: existing, isNew: false }
+          const p = resolveLatestVersion(dep, env, ctx, fallbackRepos).finally(() => inFlight.delete(key))
+          inFlight.set(key, p)
+          return { promise: p, isNew: true }
+        }
+
         // Resolve each dep concurrently; emit as each one finishes
         await Promise.all(
           deps.map(async dep => {
             emit(controller, 'checking', { name: dep.name })
             const t0 = Date.now()
-            dep.latestVersion = await resolveLatestVersion(dep, env, ctx, fallbackRepos)
+            const { promise, isNew } = resolveLatestVersionDedup(dep)
+            dep.latestVersion = await promise
             dep.upToDate = dep.latestVersion !== null ? dep.currentVersion === dep.latestVersion : null
-            const elapsed = Date.now() - t0
-            const site = dep.mavenRepo ?? dep.source
-            console.log(`[version] ${dep.name} (${site}) → ${dep.latestVersion ?? 'null'} [${elapsed}ms]`)
+            if (isNew) {
+              const elapsed = Date.now() - t0
+              const site = dep.mavenRepo ?? dep.source
+              console.log(`[version] ${dep.name} (${site}) → ${dep.latestVersion ?? 'null'} [${elapsed}ms]`)
+            }
             emit(controller, 'dep', dep)
           }),
         )

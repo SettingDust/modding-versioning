@@ -1,5 +1,4 @@
 import { renderToString } from 'hono/jsx/dom/server'
-import { CSS, JS } from './frontend.ts'
 
 function Header() {
   return (
@@ -7,8 +6,8 @@ function Header() {
       <h1>🧱 Mod Dependency Dashboard</h1>
       <div class='header-actions'>
         <span class='token-dot' title='Token indicator — green when token is set'></span>
-        <button id='btn-open-settings' class='icon-btn'>⚙ Settings</button>
-        <button id='btn-open-add' class='icon-btn'>＋ Add Repo</button>
+        <button id='btn-open-settings' class='icon-btn' type='button' aria-label='Open settings'>⚙ Settings</button>
+        <button id='btn-open-add' class='icon-btn' type='button' aria-label='Add repository'>＋ Add Repo</button>
       </div>
     </header>
   )
@@ -19,7 +18,7 @@ function SettingsDialog() {
     <dialog id='dlg-settings'>
       <div class='dlg-header'>
         <h3>Settings</h3>
-        <button id='btn-close-settings-x' class='dlg-close'>✕</button>
+        <button id='btn-close-settings-x' class='dlg-close' type='button' aria-label='Close settings'>✕</button>
       </div>
       <div class='dlg-body'>
         <p class='dlg-hint'>Paste your write token to enable adding / removing repos and saving overrides.</p>
@@ -42,16 +41,12 @@ function AddRepoDialog() {
     <dialog id='dlg-add'>
       <div class='dlg-header'>
         <h3>Add Repository</h3>
-        <button id='btn-close-add-x' class='dlg-close'>✕</button>
+        <button id='btn-close-add-x' class='dlg-close' type='button' aria-label='Close add repository dialog'>✕</button>
       </div>
       <div class='dlg-body'>
         <div class='dlg-field'>
-          <label for='dlg-add-owner'>Owner</label>
-          <input id='dlg-add-owner' placeholder='e.g. octocat' autocomplete='off' />
-        </div>
-        <div class='dlg-field'>
-          <label for='dlg-add-repo'>Repository</label>
-          <input id='dlg-add-repo' placeholder='e.g. my-mod' autocomplete='off' />
+          <label for='dlg-add-repo-input'>GitHub URL or owner/repo</label>
+          <input id='dlg-add-repo-input' placeholder='e.g. github.com/octocat/my-mod or octocat/my-mod' autocomplete='off' />
         </div>
         <div class='dlg-actions'>
           <span id='dlg-add-err' class='msg err'></span>
@@ -68,7 +63,7 @@ function SetRepoDialog() {
     <dialog id='dlg-set-repo'>
       <div class='dlg-header'>
         <h3>Set Maven Repository</h3>
-        <button id='btn-close-set-repo-x' class='dlg-close'>✕</button>
+        <button id='btn-close-set-repo-x' class='dlg-close' type='button' aria-label='Close set repository dialog'>✕</button>
       </div>
       <div class='dlg-body'>
         <p class='dlg-hint'>
@@ -96,9 +91,11 @@ function DashboardMain() {
     <main>
       <section>
         <h2>Repositories</h2>
-        <div id='repo-grid' class='repo-grid'></div>
+        <div class='repo-row'>
+          <select id='repo-select' aria-label='Select repository'></select>
+          <button id='btn-remove-repo' type='button' class='icon-btn' style='display:none' aria-label='Remove selected repository'>✕ Remove</button>
+        </div>
       </section>
-
       <SetRepoDialog />
 
       <section>
@@ -107,6 +104,7 @@ function DashboardMain() {
           <span id='results-repo-label' class='repo-label'></span>
           <span id='results-ctx'></span>
         </div>
+        <p id='results-status' class='sr-only' role='status' aria-live='polite' aria-atomic='true'></p>
         <div id='results'></div>
       </section>
     </main>
@@ -120,14 +118,14 @@ function DashboardDocument() {
         <meta charSet='UTF-8' />
         <meta name='viewport' content='width=device-width, initial-scale=1' />
         <title>Mod Dependency Dashboard</title>
-        <style dangerouslySetInnerHTML={{ __html: CSS }} />
+        <link rel='stylesheet' href='/app.css' />
       </head>
       <body>
         <Header />
         <SettingsDialog />
         <AddRepoDialog />
         <DashboardMain />
-        <script dangerouslySetInnerHTML={{ __html: JS }} />
+        <script src='/app.js'></script>
       </body>
     </html>
   )

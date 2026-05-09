@@ -54,6 +54,8 @@ export interface ParsedDependency {
 
 export interface VersionCheckResult extends ParsedDependency {
   latestVersion: string | null
+  /** Traceable reason when latestVersion cannot be resolved */
+  latestError?: string | null
   /** null when latestVersion could not be fetched */
   upToDate: boolean | null
 }
@@ -100,3 +102,4 @@ export type OverrideMap = Record<
     cfProjectId?: string
   }
 >
+

@@ -1,3 +1,56 @@
+import type { DeclaredDep } from './types.ts'
+
+const OWNER_REPO_SEGMENT_RE = /^[a-zA-Z0-9._-]+$/
+
+export function parseGitHubRepoInput(input: string): { owner: string; repo: string } | null {
+  const raw = input.trim()
+  if (!raw) return null
+
+  const parseOwnerRepo = (ownerRaw: string, repoRaw: string): { owner: string; repo: string } | null => {
+    const owner = ownerRaw.trim()
+    const repoWithSuffix = repoRaw.trim()
+    const repo = repoWithSuffix.replace(/\.git$/i, '')
+    if (!owner || !repo) return null
+    if (!OWNER_REPO_SEGMENT_RE.test(owner) || !OWNER_REPO_SEGMENT_RE.test(repo)) return null
+    return { owner, repo }
+  }
+
+  const tryParseAsUrl = (urlInput: string): { owner: string; repo: string } | null => {
+    let parsed: URL
+    try {
+      parsed = new URL(urlInput)
+    } catch {
+      return null
+    }
+
+    const host = parsed.hostname.toLowerCase()
+    if (host !== 'github.com' && host !== 'www.github.com') return null
+
+    const segments = parsed.pathname.split('/').filter(Boolean)
+    if (segments.length !== 2) return null
+
+    let owner: string
+    let repo: string
+    try {
+      owner = decodeURIComponent(segments[0])
+      repo = decodeURIComponent(segments[1])
+    } catch {
+      return null
+    }
+    return parseOwnerRepo(owner, repo)
+  }
+
+  if (/^https?:\/\//i.test(raw)) return tryParseAsUrl(raw)
+
+  if (/^(?:www\.)?github\.com\//i.test(raw)) {
+    return tryParseAsUrl(`https://${raw}`)
+  }
+
+  const textMatch = raw.match(/^([^/\s]+)\/([^/\s]+)$/)
+  if (!textMatch) return null
+  return parseOwnerRepo(textMatch[1], textMatch[2])
+}
+
 // ---------------------------------------------------------------------------
 // Utility: balanced brace extraction
 // ---------------------------------------------------------------------------
@@ -48,36 +101,63 @@ function extractBalancedBlock(content: string): string | null {
 export function buildRepoMapping(content: string): Map<string, string> {
   const groupToRepo = new Map<string, string>()
 
-  // Find the top-level repositories { } block.
-  const repoBlockMatch = content.match(/\brepositories\s*\{/)
-  if (!repoBlockMatch) return groupToRepo
+  const repoBlockRe = /\brepositories\s*\{/g
+  let rb: RegExpExecArray | null
+  while ((rb = repoBlockRe.exec(content)) !== null) {
+    const afterKeyword = content.slice(rb.index + rb[0].length - 1)
+    const repoBlock = extractBalancedBlock(afterKeyword)
+    if (!repoBlock) continue
 
-  const afterKeyword = content.slice(repoBlockMatch.index! + repoBlockMatch[0].length - 1)
-  const repoBlock = extractBalancedBlock(afterKeyword)
-  if (!repoBlock) return groupToRepo
+    if (repoBlock.includes('mavenCentral()')) {
+      groupToRepo.set('__central__', 'https://repo1.maven.org/maven2')
+    }
 
-  if (repoBlock.includes('mavenCentral()')) {
-    groupToRepo.set('__central__', 'https://repo1.maven.org/maven2')
-  }
+    // For each maven("url") occurrence, look at the text up to the next maven(" for groups.
+    const mavenUrlRe = /\bmaven\s*\(\s*["']([^"']+)["']\s*\)/g
+    let m: RegExpExecArray | null
 
-  // For each maven("url") occurrence, look at the text up to the next maven(" for groups.
-  const mavenUrlRe = /\bmaven\s*\(\s*["']([^"']+)["']\s*\)/g
-  let m: RegExpExecArray | null
+    while ((m = mavenUrlRe.exec(repoBlock)) !== null) {
+      const repoUrl = m[1].replace(/\/$/, '')
+      const searchStart = m.index + m[0].length
 
-  while ((m = mavenUrlRe.exec(repoBlock)) !== null) {
-    const repoUrl = m[1].replace(/\/$/, '')
-    const searchStart = m.index + m[0].length
+      // Bound the search at the next maven(" to avoid cross-contamination.
+      const rest = repoBlock.slice(searchStart)
+      const nextMavenIdx = rest.search(/\bmaven\s*\(\s*["']/)
+      const searchArea = nextMavenIdx === -1 ? rest : rest.slice(0, nextMavenIdx)
 
-    // Bound the search at the next maven(" to avoid cross-contamination.
-    const rest = repoBlock.slice(searchStart)
-    const nextMavenIdx = rest.search(/\bmaven\s*\(\s*["']/)
-    const searchArea = nextMavenIdx === -1 ? rest : rest.slice(0, nextMavenIdx)
+      const exactGroup = searchArea.match(/\bincludeGroup\s*\(\s*["']([^"']+)["']\s*\)/)
+      const subGroups = searchArea.match(/\bincludeGroupAndSubgroups\s*\(\s*["']([^"']+)["']\s*\)/)
 
-    const exactGroup = searchArea.match(/\bincludeGroup\s*\(\s*["']([^"']+)["']\s*\)/)
-    const subGroups = searchArea.match(/\bincludeGroupAndSubgroups\s*\(\s*["']([^"']+)["']\s*\)/)
+      if (exactGroup) groupToRepo.set(exactGroup[1], repoUrl)
+      if (subGroups) groupToRepo.set(subGroups[1], repoUrl)
+    }
 
-    if (exactGroup) groupToRepo.set(exactGroup[1], repoUrl)
-    if (subGroups) groupToRepo.set(subGroups[1], repoUrl)
+    // Support block-style declarations:
+    // maven {
+    //   url = uri("https://repo.example.com")
+    //   content { includeGroup("x.y") }
+    // }
+    const mavenBlockRe = /\bmaven\s*\{/g
+    while ((m = mavenBlockRe.exec(repoBlock)) !== null) {
+      const afterMaven = repoBlock.slice(m.index + m[0].length - 1)
+      const mavenBlock = extractBalancedBlock(afterMaven)
+      if (!mavenBlock) continue
+
+      const repoUrlMatch = mavenBlock.match(/\burl\s*=\s*(?:uri\s*\(\s*)?["']([^"']+)["']\s*\)?/)
+      const repoUrl = repoUrlMatch?.[1]?.replace(/\/$/, '')
+      if (!repoUrl) continue
+
+      const includeGroupRe = /\bincludeGroup\s*\(\s*["']([^"']+)["']\s*\)/g
+      const includeSubgroupsRe = /\bincludeGroupAndSubgroups\s*\(\s*["']([^"']+)["']\s*\)/g
+
+      let gm: RegExpExecArray | null
+      while ((gm = includeGroupRe.exec(mavenBlock)) !== null) {
+        groupToRepo.set(gm[1], repoUrl)
+      }
+      while ((gm = includeSubgroupsRe.exec(mavenBlock)) !== null) {
+        groupToRepo.set(gm[1], repoUrl)
+      }
+    }
   }
 
   return groupToRepo
@@ -85,7 +165,7 @@ export function buildRepoMapping(content: string): Map<string, string> {
 
 /**
  * Returns the best known repository URL for a given Maven group.
- * Falls back to Maven Central if no specific mapping is found.
+ * Only returns an explicitly mapped repository for the group.
  */
 export function resolveRepoUrl(group: string, groupToRepo: Map<string, string>): string | undefined {
   // Exact match first
@@ -97,8 +177,7 @@ export function resolveRepoUrl(group: string, groupToRepo: Map<string, string>):
     if (group === prefix || group.startsWith(`${prefix}.`)) return url
   }
 
-  // Fallback to Maven Central
-  return groupToRepo.get('__central__')
+  return undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +220,6 @@ export function parseMcVersion(
 // ---------------------------------------------------------------------------
 // Declared dependency extraction from Gradle KTS build/settings files
 // ---------------------------------------------------------------------------
-
-import type { DeclaredDep } from './types.ts'
 
 /**
  * Extracts explicitly declared Maven dependency coordinates (group:artifact)
@@ -368,24 +445,45 @@ export function parseDependencyBlocks(content: string, file: string): DeclaredDe
 export function buildFallbackRepos(content: string): string[] {
   const repos: string[] = []
 
-  const repoBlockMatch = content.match(/\brepositories\s*\{/)
-  if (!repoBlockMatch) return repos
+  const repoBlockRe = /\brepositories\s*\{/g
+  let rb: RegExpExecArray | null
+  while ((rb = repoBlockRe.exec(content)) !== null) {
+    const afterKeyword = content.slice(rb.index + rb[0].length - 1)
+    const repoBlock = extractBalancedBlock(afterKeyword)
+    if (!repoBlock) continue
 
-  const afterKeyword = content.slice(repoBlockMatch.index! + repoBlockMatch[0].length - 1)
-  const repoBlock = extractBalancedBlock(afterKeyword)
-  if (!repoBlock) return repos
+    const repoEntryRe = /\bmavenCentral\s*\(\s*\)|\bmaven\s*\(\s*["']([^"']+)["']\s*\)|\bmaven\s*\{/g
+    let m: RegExpExecArray | null
 
-  const mavenUrlRe = /\bmaven\s*\(\s*["']([^"']+)["']\s*\)/g
-  let m: RegExpExecArray | null
+    while ((m = repoEntryRe.exec(repoBlock)) !== null) {
+      if (m[0].startsWith('mavenCentral')) {
+        const central = 'https://repo1.maven.org/maven2'
+        if (!repos.includes(central)) repos.push(central)
+        continue
+      }
 
-  while ((m = mavenUrlRe.exec(repoBlock)) !== null) {
-    const repoUrl = m[1].replace(/\/$/, '')
-    const searchStart = m.index + m[0].length
-    const rest = repoBlock.slice(searchStart)
-    const nextMavenIdx = rest.search(/\bmaven\s*\(\s*["']/)
-    const searchArea = nextMavenIdx === -1 ? rest : rest.slice(0, nextMavenIdx)
-    const hasFilter = /\bincludeGroup(?:AndSubgroups)?\s*\(/.test(searchArea)
-    if (!hasFilter) repos.push(repoUrl)
+      if (m[0].startsWith('maven {') || m[0].startsWith('maven{')) {
+        const afterMaven = repoBlock.slice(m.index + m[0].length - 1)
+        const mavenBlock = extractBalancedBlock(afterMaven)
+        if (!mavenBlock) continue
+
+        const repoUrlMatch = mavenBlock.match(/\burl\s*=\s*(?:uri\s*\(\s*)?["']([^"']+)["']\s*\)?/)
+        const repoUrl = repoUrlMatch?.[1]?.replace(/\/$/, '')
+        if (!repoUrl) continue
+
+        const hasFilter = /\bincludeGroup(?:AndSubgroups)?\s*\(/.test(mavenBlock)
+        if (!hasFilter && !repos.includes(repoUrl)) repos.push(repoUrl)
+        continue
+      }
+
+      const repoUrl = m[1].replace(/\/$/, '')
+      const searchStart = m.index + m[0].length
+      const rest = repoBlock.slice(searchStart)
+      const nextRepoIdx = rest.search(/\bmavenCentral\s*\(\s*\)|\bmaven\s*\(\s*["']|\bmaven\s*\{/)
+      const searchArea = nextRepoIdx === -1 ? rest : rest.slice(0, nextRepoIdx)
+      const hasFilter = /\bincludeGroup(?:AndSubgroups)?\s*\(/.test(searchArea)
+      if (!hasFilter && !repos.includes(repoUrl)) repos.push(repoUrl)
+    }
   }
 
   return repos

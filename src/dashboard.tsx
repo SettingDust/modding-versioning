@@ -6,6 +6,7 @@ function Header() {
       <h1>🧱 Mod Dependency Dashboard</h1>
       <div class='header-actions'>
         <span class='token-dot' title='Token indicator — green when token is set'></span>
+        <button id='btn-theme-toggle' class='icon-btn theme-toggle' type='button' aria-label='Toggle theme'>◐ Theme</button>
         <button id='btn-open-settings' class='icon-btn' type='button' aria-label='Open settings'>⚙ Settings</button>
         <button id='btn-open-add' class='icon-btn' type='button' aria-label='Add repository'>＋ Add Repo</button>
       </div>
@@ -120,7 +121,7 @@ function DashboardDocument() {
         <title>Mod Dependency Dashboard</title>
         <link rel='preconnect' href='https://fonts.googleapis.com' />
         <link rel='preconnect' href='https://fonts.gstatic.com' crossOrigin='' />
-        <link href='https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap' rel='stylesheet' />
+        <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap' rel='stylesheet' />
         <link rel='stylesheet' href='/app.css' />
       </head>
       <body>

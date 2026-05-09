@@ -1,5 +1,36 @@
 
 const API = ''
+const THEME_KEY = 'mvd_theme'
+
+function getSystemTheme() {
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function getPreferredTheme() {
+  const saved = safeStorageGet(THEME_KEY, '')
+  return saved === 'dark' || saved === 'light' ? saved : getSystemTheme()
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme
+  document.body.dataset.theme = theme
+  const btn = document.getElementById('btn-theme-toggle')
+  if (btn) {
+    btn.textContent = theme === 'dark' ? '◐ Dark' : '◐ Light'
+    btn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme')
+  }
+}
+
+function initTheme() {
+  applyTheme(getPreferredTheme())
+}
+
+function toggleTheme() {
+  const current = document.documentElement.dataset.theme || getPreferredTheme()
+  const next = current === 'dark' ? 'light' : 'dark'
+  safeStorageSet(THEME_KEY, next)
+  applyTheme(next)
+}
 
 function safeStorageGet(key, fallback = null) {
   try {
@@ -48,6 +79,7 @@ function closeDialog(id) {
 }
 
 function bindStaticHandlers() {
+  document.getElementById('btn-theme-toggle')?.addEventListener('click', toggleTheme)
   document.getElementById('btn-open-settings')?.addEventListener('click', () => openDialog('dlg-settings'))
   document.getElementById('btn-open-add')?.addEventListener('click', () => openDialog('dlg-add'))
   document.getElementById('repo-select').addEventListener('change', function () {
@@ -588,5 +620,6 @@ function variantSuffix(name, logicalName) {
 }
 
 bindStaticHandlers()
+initTheme()
 initAuth()
 loadRepos()

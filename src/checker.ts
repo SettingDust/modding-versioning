@@ -6,9 +6,104 @@ import { detectSource, groupDeps } from './detector.ts'
 import { getOverrides } from './overrides.ts'
 import { cachedFetch } from './cache.ts'
 import { getLatestFabricLoader } from './sources/fabric.ts'
-import { getLatestMavenVersion } from './sources/maven.ts'
+import { getLatestMavenVersionWithReason } from './sources/maven.ts'
+import { combineVersionPredicates } from './sources/maven.ts'
 import { getLatestModrinthVersion } from './sources/modrinth.ts'
 import { getLatestCurseForgeVersion } from './sources/curseforge.ts'
+
+const RESULT_CACHE_VERSION = 'v3'
+const VERSION_CACHE_VERSION = 'v3'
+
+const VERSION_FILTER_LOADERS = new Set(['forge', 'neoforge', 'fabric', 'quilt', 'liteloader', 'lexforge', 'common', 'klf'])
+
+interface ResolvedVersionInfo {
+  version: string | null
+  resolvedRepo?: string
+  error?: string | null
+}
+
+interface ParsedVersionFilters {
+  loader: string | null
+  mcVersion: string | null
+}
+
+const FILTER_LOADERS_RE = /^(forge|neoforge|fabric|quilt|liteloader|lexforge|common|klf)$/i
+const MC_VER_RE = /^1\.\d+(?:\.\d+)?$/
+function normalizeFilterToken(token: string): string {
+  return token.trim().toLowerCase()
+}
+
+function parseFilterTokens(tokens: string[]): ParsedVersionFilters {
+  const normalized = tokens.map(normalizeFilterToken).filter(Boolean)
+  const loader = normalized.find(token => FILTER_LOADERS_RE.test(token)) ?? null
+  const mcVersion = normalized.find(token => MC_VER_RE.test(token)) ?? null
+  return { loader, mcVersion }
+}
+
+function parsePlusFilters(version: string): ParsedVersionFilters {
+  const plusIdx = version.indexOf('+')
+  if (plusIdx === -1) return { loader: null, mcVersion: null }
+  const plusTokens = version.slice(plusIdx + 1).split('+')
+  return parseFilterTokens(plusTokens)
+}
+
+function parseDashFilters(version: string): ParsedVersionFilters {
+  const dashIdx = version.indexOf('-')
+  if (dashIdx === -1) return { loader: null, mcVersion: null }
+  const dashTokens = version
+    .slice(dashIdx + 1)
+    .split(/[,-]/)
+  return parseFilterTokens(dashTokens)
+}
+
+export function parseVersionFilters(version: string): ParsedVersionFilters {
+  const plus = parsePlusFilters(version)
+
+  // Priority: +MC+loader > +MC > +loader > dash-based filters.
+  if (plus.loader && plus.mcVersion) return plus
+  if (plus.mcVersion) return { loader: null, mcVersion: plus.mcVersion }
+  if (plus.loader) return { loader: plus.loader, mcVersion: null }
+
+  return parseDashFilters(version)
+}
+
+function extractTrailingLoaderTag(version: string): string | null {
+  const plus = parsePlusFilters(version)
+  if (plus.loader) return plus.loader
+
+  const dash = parseDashFilters(version)
+  return dash.loader
+}
+
+export function versionsMatchForDisplay(
+  currentVersion: string,
+  latestVersion: string,
+  source: VersionCheckResult['source'],
+): boolean {
+  if (currentVersion === latestVersion) return true
+
+  // Some upstreams encode loader filters in the resolved version string while the
+  // latest upstream version omits them, e.g. "1.2.0-fabric" vs "1.2.0".
+  if (source === 'modrinth' || source === 'maven' || source === 'unknown') {
+    if (currentVersion.startsWith(`${latestVersion}-`)) {
+      const suffix = currentVersion.slice(latestVersion.length + 1)
+      const suffixTokens = suffix.split(',').map(token => token.trim()).filter(Boolean)
+      if (suffixTokens.length > 0 && suffixTokens.every(token => VERSION_FILTER_LOADERS.has(token) || /^\d+\.\d+(?:\.\d+)*$/.test(token))) {
+        return true
+      }
+    }
+
+    if (currentVersion.startsWith(`${latestVersion}+`)) {
+      const suffix = currentVersion.slice(latestVersion.length + 1)
+      const suffixTokens = suffix.split('+').map(token => token.trim().toLowerCase()).filter(Boolean)
+      if (suffixTokens.length > 0 && suffixTokens.every(token => VERSION_FILTER_LOADERS.has(token) || MC_VER_RE.test(token))) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
 
 // ---------------------------------------------------------------------------
 // Loader inference from SBOM packages
@@ -52,7 +147,6 @@ function inferLoaders(packages: SpdxPackage[]): { loaders: string[]; loaderVersi
 // ---------------------------------------------------------------------------
 
 /**
-/**
  * For a `maven.modrinth` package, determines the Modrinth query context
  * (loader + MC version) by inspecting two sources in priority order:
  *
@@ -91,28 +185,14 @@ function extractModrinthDepContext(
   }
 
   // ── Source 2: Modrinth Maven version filter syntax ───────────────────────
-  // Pattern: "{version_number}-{filter1}[,{filter2},...]"
-  // where filters are loader names and/or MC version strings.
-  // E.g. "1.2.0-fabric", "3.0.9-fabric,1.20.2", "1.19.4-2.4.13-forge"
-  const FILTER_LOADERS = /^(forge|neoforge|fabric|quilt|liteloader)$/i
-  const MC_VER_RE = /^\d+\.\d+(?:\.\d+)?$/
-
-  // Find the last '-' that is followed by filter tokens
-  const dashIdx = currentVersion.lastIndexOf('-')
-  if (dashIdx !== -1) {
-    const filterPart = currentVersion.slice(dashIdx + 1) // e.g. "fabric" or "fabric,1.20.2"
-    const filters = filterPart.split(',')
-    const loaderFilter = filters.find(f => FILTER_LOADERS.test(f))
-    const mcFilter = filters.find(f => MC_VER_RE.test(f))
-
-    if (loaderFilter) {
-      // Only constrain mcVersion if explicitly present in filter; otherwise
-      // don't inherit the project mcVersion (the dep may target a different MC).
-      return {
-        mcVersion: mcFilter ?? null,
-        loaders: [loaderFilter.toLowerCase()],
-        loaderVersions: fallbackCtx.loaderVersions,
-      }
+  // Supports both "-" and "+" separators.
+  // E.g. "1.2.0-fabric", "3.0.9-fabric,1.20.2", "0.7.6+1.21+neoforge", "1.2.0+fabric".
+  const parsed = parseVersionFilters(currentVersion)
+  if (parsed.loader || parsed.mcVersion) {
+    return {
+      mcVersion: parsed.mcVersion,
+      loaders: parsed.loader ? [parsed.loader] : [],
+      loaderVersions: fallbackCtx.loaderVersions,
     }
   }
 
@@ -129,45 +209,45 @@ async function resolveLatestVersion(
   env: Env,
   ctx: ProjectContext,
   fallbackRepos: string[],
-): Promise<string | null> {
+): Promise<ResolvedVersionInfo> {
   const cache = env.VERSION_CACHE
   // Include context and dep-specific coordinates in cache key.
   // This avoids cross-pollinating results between same identifier queried in
   // different contexts (e.g. different currentVersion suffixes or mapped repos).
   const ctxSuffix = `${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
-  const cacheKey = `version:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctxSuffix}`
+  const cacheKey = `version:${VERSION_CACHE_VERSION}:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctxSuffix}`
   const TTL = 3600 // 1 hour
 
-  return cachedFetch<string | null>(cache, cacheKey, TTL, async () => {
+  return cachedFetch<ResolvedVersionInfo>(cache, cacheKey, TTL, async () => {
     switch (dep.source) {
       case 'fabric':
-        return getLatestFabricLoader()
+        return { version: await getLatestFabricLoader() }
 
       case 'modrinth': {
         // Use per-dep loader + MC version extracted from artifact name / version filter
         const depCtx = extractModrinthDepContext(dep.name, dep.currentVersion, ctx)
-        return getLatestModrinthVersion(dep.identifier, depCtx)
+        return { version: await getLatestModrinthVersion(dep.identifier, depCtx) }
       }
 
       case 'curseforge': {
-        if (!env.CURSEFORGE_API_KEY) return null
-        return getLatestCurseForgeVersion(dep.identifier, env.CURSEFORGE_API_KEY, ctx)
+        if (!env.CURSEFORGE_API_KEY) return { version: null }
+        return { version: await getLatestCurseForgeVersion(dep.identifier, env.CURSEFORGE_API_KEY, ctx) }
       }
 
       case 'forge':
       case 'neoforge':
       case 'maven': {
         const colonIdx = dep.identifier.indexOf(':')
-        if (colonIdx === -1) return null
+        if (colonIdx === -1) return { version: null, error: `Invalid Maven coordinate: ${dep.identifier}` }
         const group = dep.identifier.slice(0, colonIdx)
         const artifact = dep.identifier.slice(colonIdx + 1)
         // If the current version has a "+loader" suffix (e.g. "2.10.6-k2.2.21-2.0+forge"),
         // only consider maven metadata versions with the same loader suffix.
         // This prevents picking up a neoforge-tagged version as "latest" for a forge dep
         // when both loader variants share the same Maven artifact coordinates.
-        const plusLoader = dep.currentVersion.match(/\+([a-zA-Z]+)$/)?.[1]?.toLowerCase()
-        let versionFilter: ((v: string) => boolean) | undefined = plusLoader
-          ? (v: string) => v.split('+')[1]?.toLowerCase() === plusLoader
+        const extractedLoader = extractTrailingLoaderTag(dep.currentVersion)
+        let versionFilter: ((v: string) => boolean) | undefined = extractedLoader
+          ? (v: string) => extractTrailingLoaderTag(v) === extractedLoader
           : undefined
 
         // For Forge / NeoForge, each MC version has its own versioning series.
@@ -187,40 +267,61 @@ async function resolveLatestVersion(
             }
           }
         }
+        versionFilter = combineVersionPredicates(versionFilter)
+
+        const errors: string[] = []
+        const probeRepo = async (repo: string): Promise<ResolvedVersionInfo | null> => {
+          const result = await getLatestMavenVersionWithReason(repo, group, artifact, versionFilter)
+          if (result.version !== null) return { version: result.version, resolvedRepo: repo, error: null }
+          if (result.error) errors.push(`[${repo}] ${result.error}`)
+          return null
+        }
+
         // Try the explicitly mapped repo first
         if (dep.mavenRepo) {
-          const v = await getLatestMavenVersion(dep.mavenRepo, group, artifact, versionFilter)
-          if (v !== null) return v
+          const probed = await probeRepo(dep.mavenRepo)
+          if (probed) return probed
         }
         // Fall through to probe build-script repos below
         for (const repo of fallbackRepos) {
           if (repo === dep.mavenRepo) continue
-          const v = await getLatestMavenVersion(repo, group, artifact, versionFilter)
-          if (v !== null) return v
+          const probed = await probeRepo(repo)
+          if (probed) return probed
         }
-        return null
+        if (!errors.length) {
+          return { version: null, error: `No Maven repository produced metadata for ${group}:${artifact}` }
+        }
+        return { version: null, error: errors.join(' | ') }
       }
 
       case 'unknown': {
         // No source detected — probe all build-script repos as a best-effort fallback
-        if (!fallbackRepos.length) return null
+        if (!fallbackRepos.length) {
+          return { version: null, error: `No fallback repositories discovered for ${dep.identifier}` }
+        }
         const colonIdx = dep.identifier.indexOf(':')
-        if (colonIdx === -1) return null
+        if (colonIdx === -1) return { version: null, error: `Invalid Maven coordinate: ${dep.identifier}` }
         const group = dep.identifier.slice(0, colonIdx)
         const artifact = dep.identifier.slice(colonIdx + 1)
-        const plusLoader = dep.currentVersion.match(/\+([a-zA-Z]+)$/)?.[1]?.toLowerCase()
-        const versionFilter = plusLoader
-          ? (v: string) => v.split('+')[1]?.toLowerCase() === plusLoader
+        const extractedLoader = extractTrailingLoaderTag(dep.currentVersion)
+        const versionFilter = extractedLoader
+          ? (v: string) => extractTrailingLoaderTag(v) === extractedLoader
           : undefined
+        const finalVersionFilter = combineVersionPredicates(versionFilter)
+        const errors: string[] = []
         for (const repo of fallbackRepos) {
-          const v = await getLatestMavenVersion(repo, group, artifact, versionFilter)
-          if (v !== null) return v
+          const result = await getLatestMavenVersionWithReason(repo, group, artifact, finalVersionFilter)
+          if (result.version !== null) return { version: result.version, resolvedRepo: repo, error: null }
+          if (result.error) errors.push(`[${repo}] ${result.error}`)
         }
-        return null
+        if (!errors.length) {
+          return { version: null, error: `No fallback repository produced metadata for ${group}:${artifact}` }
+        }
+        return { version: null, error: errors.join(' | ') }
       }
 
       default:
-        return null
+        return { version: null }
     }
   })
 }
@@ -272,7 +373,13 @@ async function setupRepo(
     fetchFileContent(owner, repo, 'gradle/libs.versions.toml', token).catch(() => null),
   ])
 
-  const repoMap = buildContent ? buildRepoMapping(buildContent) : new Map<string, string>()
+  const repoMap = new Map<string, string>()
+  for (const content of [settingsContent, buildContent]) {
+    if (!content) continue
+    for (const [group, repoUrl] of buildRepoMapping(content).entries()) {
+      repoMap.set(group, repoUrl)
+    }
+  }
 
   // 3. Build project context
   const { loaders, loaderVersions } = inferLoaders(sbom.packages)
@@ -327,7 +434,42 @@ async function setupRepo(
     return idx !== -1 ? name.slice(0, idx) : name
   }
 
+  function pkgArtifact(name: string): string {
+    const idx = name.indexOf(':')
+    return idx !== -1 ? name.slice(idx + 1) : ''
+  }
+
+  function deriveLogicalArtifact(artifact: string): string {
+    let base = artifact
+    const LOADER_SUFFIX_RE = /-(forge|neoforge|fabric|quilt|common|lexforge|klf)$/i
+    const MC_VERSION_RE = /-(\d+\.)+\d+$/
+    for (let i = 0; i < 4; i++) {
+      const prev = base
+      base = base.replace(LOADER_SUFFIX_RE, '').replace(MC_VERSION_RE, '')
+      if (base === prev) break
+    }
+    return base || artifact
+  }
+
   const declaredExact = new Set(declaredMap.keys())
+
+  const declaredModrinthIds = new Set(
+    [...declaredExact]
+      .filter(n => n.startsWith('maven.modrinth:'))
+      .map(n => pkgArtifact(n).toLowerCase()),
+  )
+
+  function allowDeclaredGroupPackage(name: string): boolean {
+    const group = pkgGroup(name)
+    if (!declaredGroups.has(group)) return false
+    if (group !== 'maven.modrinth') return true
+
+    // For Modrinth, avoid a broad group wildcard that can leak unrelated direct deps.
+    if (!declaredModrinthIds.size) return false
+    const logicalArtifact = deriveLogicalArtifact(pkgArtifact(name)).toLowerCase()
+    return declaredModrinthIds.has(logicalArtifact)
+  }
+
   const isLoaderPkg = (name: string) => LOADER_PATTERNS.some(([re]) => re.test(name))
 
   const targetPackages = declaredGroups.size > 0 || declaredExact.size > 0
@@ -335,7 +477,7 @@ async function setupRepo(
         !BLOCKED_PACKAGES.has(p.name) && (
           isLoaderPkg(p.name) ||
           declaredExact.has(p.name) ||
-          (declaredGroups.has(pkgGroup(p.name)) && sbom.directIds.has(p.SPDXID))
+          (allowDeclaredGroupPackage(p.name) && sbom.directIds.has(p.SPDXID))
         )
       )
     : sbom.packages.filter(p => !BLOCKED_PACKAGES.has(p.name) && sbom.directIds.has(p.SPDXID))
@@ -371,7 +513,7 @@ async function setupRepo(
     }
   })
 
-  return { resultKey: `result:${owner}/${repo}`, ctx, deps, fallbackRepos }
+  return { resultKey: `result:${RESULT_CACHE_VERSION}:${owner}/${repo}`, ctx, deps, fallbackRepos }
 }
 
 /**
@@ -386,7 +528,7 @@ export async function checkRepo(
   env: Env,
 ): Promise<CheckResult | null> {
   // Fast-path: full result from cache
-  const resultKey = `result:${owner}/${repo}`
+  const resultKey = `result:${RESULT_CACHE_VERSION}:${owner}/${repo}`
   const cachedResult = await env.VERSION_CACHE.get<CheckResult>(resultKey, 'json')
   if (cachedResult !== null) return cachedResult
 
@@ -394,9 +536,9 @@ export async function checkRepo(
   if (!setup) return null
   const { ctx, deps, fallbackRepos } = setup
 
-  const inFlight = new Map<string, Promise<string | null>>()
-  function resolveLatestVersionDedup(dep: VersionCheckResult): Promise<string | null> {
-    const key = `version:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
+  const inFlight = new Map<string, Promise<ResolvedVersionInfo>>()
+  function resolveLatestVersionDedup(dep: VersionCheckResult): Promise<ResolvedVersionInfo> {
+    const key = `version:${VERSION_CACHE_VERSION}:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
     const existing = inFlight.get(key)
     if (existing) return existing
     const p = resolveLatestVersion(dep, env, ctx, fallbackRepos).finally(() => inFlight.delete(key))
@@ -406,8 +548,13 @@ export async function checkRepo(
 
   await Promise.all(
     deps.map(async dep => {
-      dep.latestVersion = await resolveLatestVersionDedup(dep)
-      dep.upToDate = dep.latestVersion !== null ? dep.currentVersion === dep.latestVersion : null
+      const resolved = await resolveLatestVersionDedup(dep)
+      dep.latestVersion = resolved.version
+      dep.latestError = resolved.error ?? null
+      if (resolved.resolvedRepo) dep.mavenRepo = resolved.resolvedRepo
+      dep.upToDate = dep.latestVersion !== null
+        ? versionsMatchForDisplay(dep.currentVersion, dep.latestVersion, dep.source)
+        : null
     }),
   )
 
@@ -443,7 +590,7 @@ export function checkRepoStream(
     async start(controller) {
       try {
         // Fast-path: stream from cache
-        const resultKey = `result:${owner}/${repo}`
+        const resultKey = `result:${RESULT_CACHE_VERSION}:${owner}/${repo}`
         const cached = await env.VERSION_CACHE.get<CheckResult>(resultKey, 'json')
         if (cached !== null) {
           const allDeps = cached.groups.flatMap(g => g.variants)
@@ -465,9 +612,9 @@ export function checkRepoStream(
         const { ctx, deps, fallbackRepos } = setup
         emit(controller, 'context', { context: ctx, total: deps.length })
 
-        const inFlight = new Map<string, Promise<string | null>>()
-        function resolveLatestVersionDedup(dep: VersionCheckResult): { promise: Promise<string | null>; isNew: boolean } {
-          const key = `version:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
+        const inFlight = new Map<string, Promise<ResolvedVersionInfo>>()
+        function resolveLatestVersionDedup(dep: VersionCheckResult): { promise: Promise<ResolvedVersionInfo>; isNew: boolean } {
+          const key = `version:${VERSION_CACHE_VERSION}:${dep.source}:${dep.identifier}:${dep.currentVersion}:${dep.mavenRepo ?? ''}:${ctx.mcVersion ?? ''}:${ctx.loaders.join(',')}`
           const existing = inFlight.get(key)
           if (existing) return { promise: existing, isNew: false }
           const p = resolveLatestVersion(dep, env, ctx, fallbackRepos).finally(() => inFlight.delete(key))
@@ -481,8 +628,13 @@ export function checkRepoStream(
             emit(controller, 'checking', { name: dep.name })
             const t0 = Date.now()
             const { promise, isNew } = resolveLatestVersionDedup(dep)
-            dep.latestVersion = await promise
-            dep.upToDate = dep.latestVersion !== null ? dep.currentVersion === dep.latestVersion : null
+            const resolved = await promise
+            dep.latestVersion = resolved.version
+            dep.latestError = resolved.error ?? null
+            if (resolved.resolvedRepo) dep.mavenRepo = resolved.resolvedRepo
+            dep.upToDate = dep.latestVersion !== null
+              ? versionsMatchForDisplay(dep.currentVersion, dep.latestVersion, dep.source)
+              : null
             if (isNew) {
               const elapsed = Date.now() - t0
               const site = dep.mavenRepo ?? dep.source

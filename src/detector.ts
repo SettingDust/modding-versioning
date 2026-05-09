@@ -25,7 +25,7 @@ function extractCfProjectId(artifact: string): string | null {
  *   jei-238222                 → jei-238222  (no loader/mc suffix)
  */
 const LOADER_SUFFIX_RE = /-(forge|neoforge|fabric|quilt|common|lexforge|klf)$/i
-const MC_VERSION_RE = /-\d+\.\d+(\.\d+)?$/
+const MC_VERSION_RE = /-(\d+\.)+\d+$/
 
 function deriveLogicalArtifact(artifact: string): string {
   let base = artifact
@@ -35,6 +35,16 @@ function deriveLogicalArtifact(artifact: string): string {
     if (base === prev) break
   }
   return base || artifact
+}
+
+export function normalizeModrinthMavenVersion(version: string): string {
+  // Legacy Modrinth Maven format: mc1.21.1-0.6.0+build.24 -> 0.6.0+build.24
+  const withoutMcPrefix = version.replace(/^mc\d+\.\d+(?:\.\d+)?-/, '')
+
+  // Newer format may append MC and loader via plus separators:
+  // 0.7.6+1.21+neoforge -> 0.7.6
+  // 0.7.6+1.21          -> 0.7.6
+  return withoutMcPrefix.replace(/\+\d+\.\d+(?:\.\d+)?(?:\+[a-z][a-z0-9_-]*)?$/i, '')
 }
 
 // ---------------------------------------------------------------------------
@@ -125,9 +135,9 @@ export function detectSource(
 
   // Modrinth Maven repository
   if (group === 'maven.modrinth') {
-    // Modrinth Maven versions are prefixed with the MC version, e.g. "mc1.21.1-0.6.0+build.24".
-    // Strip that prefix so the stored currentVersion matches what the Modrinth API returns.
-    const normalizedVersion = version.replace(/^mc\d+\.\d+(?:\.\d+)?-/, '')
+    // Normalize legacy and new Modrinth Maven version encodings so the stored
+    // currentVersion matches what the Modrinth API returns.
+    const normalizedVersion = normalizeModrinthMavenVersion(version)
     return {
       name: key,
       logicalName,
@@ -208,7 +218,7 @@ export function detectSource(
   return {
     name: key,
     logicalName,
-    source: resolvedRepo ? 'maven' : 'unknown',
+    source: 'maven',
     identifier: key,
     currentVersion: version,
     mavenRepo: resolvedRepo,

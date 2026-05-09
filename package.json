@@ -5,14 +5,17 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "types": "wrangler types"
+    "types": "wrangler types",
+    "test": "vitest run --coverage"
   },
   "dependencies": {
     "hono": "^4.7.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260410.1",
+    "@vitest/coverage-v8": "^2.0.0",
     "typescript": "^6.0.2",
+    "vitest": "^2.0.0",
     "wrangler": "^4.81.1"
   }
 }

@@ -1,0 +1,419 @@
+﻿schema_version: v1
+plan_id: 20260509-modding-version-parsing
+plan_objective: Fix Minecraft mod version parsing bugs + add regex dropdown UI features
+generated_at: 2026-05-09
+status: approved_by_user_decisions
+
+decisions:
+  D1:
+    choice: Frontend-backend integration (+2h)
+    impact: 2d extends backend API and query flow
+  D2:
+    choice: Vitest framework
+    impact: 2e uses vitest
+  D3:
+    choice: Full scope
+    impact: Execute all tasks in Wave 1-3
+  D4:
+    choice: English scope limited to all user-facing runtime text
+    impact: UI copy, runtime prompts, and error messages are all standardized in English; non-runtime documentation can remain as-is
+  D5:
+    choice: Plan migration scope is active plan + FIX_PLAN*.md
+    impact: Unified migration to plans/<plan_id>/ to reduce plan-document sprawl at the repository root
+  D6:
+    choice: Version template area uses a compact layout and provides a concise how-to entry
+    impact: Reduce information density and learning friction while keeping the core operation path
+  D7:
+    choice: Repository input supports a single field (GitHub URL or owner/repo) without forced lowercase; invalid input prompts are English; backend remains compatible with legacy owner/repo body fields
+    impact: 2d extends dashboard input UX and backend request parsing while preserving compatibility
+
+meta:
+  total_waves: 3
+  total_tasks: 8
+  tech_stack:
+    - TypeScript
+    - Vitest
+    - React/TSX
+    - Node.js/Wrangler
+    - CSS
+  estimated_total_time: 18h-19h
+
+global_constraints:
+  sequencing:
+    - Wave 1: 1a -> 1b
+    - Wave 2: 2a and 2b depend on Wave 1 completion
+    - Wave 2: 2c depends on 2b
+    - Wave 2: 2d depends on 2c
+    - Wave 2: 2e can start after 1b and run in parallel with 2a/2b/2c/2d
+    - Wave 3: 3a is independent and can run in parallel with any Wave 2 task
+  done_definition:
+    - Code passes TypeScript compilation
+    - Unit tests pass (Vitest)
+    - Key regression scenarios pass
+
+waves:
+  - wave_id: wave-1
+    title: Core parsing fixes
+    goal: Fix + separator normalization and dependency context extraction
+    tasks:
+      - 1a
+      - 1b
+    sync_point:
+      id: SP-W1
+      criterion: 1a/1b regression tests pass
+      required_checks:
+        - + separator and mc prefix normalization in src/detector.ts pass
+        - extractModrinthDepContext in src/checker.ts passes for both + and - formats
+  - wave_id: wave-2
+    title: Format extensions + UI + frontend-backend integration + test framework
+    goal: Complete four-segment version support, template dropdown, custom regex backend integration, and Vitest test system
+    tasks:
+      - 2a
+      - 2b
+      - 2c
+      - 2d
+      - 2e
+    sync_point:
+      id: SP-W2
+      criterion: 2e unit tests pass + 2c UI is interactable end-to-end
+      required_checks:
+        - all vitest tests pass
+        - template selection, example fill, and interaction-triggered detection pipeline are available
+        - custom regex is effective through API/query flow
+  - wave_id: wave-3
+    title: Independent issue investigation
+    goal: Investigate and fix preloading_tricks repository lookup issue, or complete traceable documentation
+    tasks:
+      - 3a
+    sync_point:
+      id: SP-W3
+      criterion: 3a investigation/fix completed
+      required_checks:
+        - root cause is identified and documented
+        - fix or fallback strategy has been implemented
+
+tasks:
+  - task_id: 1a
+    title: Fix Modrinth Maven version normalization (support + separator)
+    wave: wave-1
+    agent: backend-parser-agent
+    dependencies: []
+    parallelizable: false
+    parallelizable_with: []
+    time_estimate: 1h
+    file_changes:
+      - path: src/detector.ts
+        change_type: modify
+        focus:
+          - extend normalization to support mc prefix, +MC version, and +loader suffix
+          - keep compatibility with existing - separator behavior
+    acceptance_criteria:
+      - "0.7.6+1.21+neoforge" normalizes to "0.7.6"
+      - "mc1.21.1-0.6.0+build.24" normalizes to "0.6.0+build.24"
+      - "mc1.20.1-2.5.0" normalizes to "2.5.0"
+      - "1.2.0" remains unchanged
+
+  - task_id: 1b
+    title: Fix Modrinth dependency context extraction (support + separator)
+    wave: wave-1
+    agent: backend-checker-agent
+    dependencies:
+      - 1a
+    parallelizable: false
+    parallelizable_with: []
+    time_estimate: 2h
+    file_changes:
+      - path: src/checker.ts
+        change_type: modify
+        focus:
+          - make extractModrinthDepContext support both + and - separators
+          - unify priority rules and token parsing
+          - stabilize loader and MC version extraction
+    acceptance_criteria:
+      - "0.7.6+1.21+neoforge" -> loader=neoforge, mc=1.21
+      - "1.2.0+fabric" -> loader=fabric, mc=null
+      - "0.7.6-fabric" behavior remains unchanged
+      - "3.0.9-fabric,1.20.2" parses correctly
+      - "1.2.0-1.19.4-forge" parses correctly
+
+  - task_id: 2a
+    title: Extend version regex (support four-segment versions)
+    wave: wave-2
+    agent: backend-detector-agent
+    dependencies:
+      - 1b
+    parallelizable: true
+    parallelizable_with:
+      - 2b
+      - 2e
+      - 3a
+    time_estimate: 1h
+    file_changes:
+      - path: src/detector.ts
+        change_type: modify
+        focus:
+          - extend MC_VERSION_RE to support 2-4 segment versions
+    acceptance_criteria:
+      - "bookshelf-lib-26.1.2.4-fabric" strips suffix correctly
+      - "bookshelf-lib-20.2.15-fabric" strips suffix correctly
+      - "dynamictrees-1.20.1" strips suffix correctly
+      - "jei-238222" is not misdetected as a version number
+
+  - task_id: 2b
+    title: Extend version validation (recognize four-segment versions)
+    wave: wave-2
+    agent: backend-checker-agent
+    dependencies:
+      - 1b
+    parallelizable: true
+    parallelizable_with:
+      - 2a
+      - 2e
+      - 3a
+    time_estimate: 1h
+    file_changes:
+      - path: src/checker.ts
+        change_type: modify
+        focus:
+          - support 2-4 segment versions in versionsMatchForDisplay
+          - extract and reuse VERSION_FORMAT_RE constant
+    acceptance_criteria:
+      - "26.1.2.4" is recognized as a valid version format
+      - comparison between "1.2.0-26.1.2.4" and "1.2.0-forge,26.1.2.4" is correct
+      - "238222" is not recognized as a version format
+
+  - task_id: 2c
+    title: Implement UI dropdown (preset version templates)
+    wave: wave-2
+    agent: frontend-ui-agent
+    dependencies:
+      - 2b
+    parallelizable: true
+    parallelizable_with:
+      - 2e
+      - 3a
+    time_estimate: 3h
+    file_changes:
+      - path: src/types.ts
+        change_type: modify
+        focus:
+          - define VersionTemplate and preset template constants
+      - path: src/dashboard.tsx
+        change_type: modify
+        focus:
+          - add template dropdown, description, and click-to-fill examples
+      - path: public/app.js
+        change_type: modify
+        focus:
+          - sync frontend event handling and template switching state
+      - path: public/app.css
+        change_type: modify
+        focus:
+          - style dropdown and example area
+    acceptance_criteria:
+      - dropdown includes at least 4 preset templates (Maven/Modrinth/Fabric/Forge)
+      - selecting a template shows description and examples
+      - clicking an example copies/fills it into the version input
+      - last dropdown item includes a "Custom..." entry
+      - selected template is passed to detection logic
+
+  - task_id: 2d
+    title: Custom regex input + frontend-backend integration extension (D1)
+    wave: wave-2
+    agent: fullstack-integration-agent
+    dependencies:
+      - 2c
+    parallelizable: false
+    parallelizable_with: []
+    time_estimate: 6h
+    file_changes:
+      - path: src/dashboard.tsx
+        change_type: modify
+        focus:
+          - custom template form, validation messages, and save/edit/delete interactions
+          - replace split repository fields with one input accepting GitHub URL or owner/repo
+          - preserve user-entered casing (no forced lowercase conversion)
+          - provide English validation prompt for invalid repository input
+      - path: src/types.ts
+        change_type: modify
+        focus:
+          - CustomVersionTemplate, storage shape, and validation result type
+      - path: src/index.tsx
+        change_type: modify
+        focus:
+          - extend API param intake and pass-through for template configuration
+          - keep backward compatibility for legacy owner/repo request body while supporting single-input parsing path
+      - path: src/parser.ts
+        change_type: modify
+        focus:
+          - support template rule mounting in parsing pipeline
+      - path: src/sources/maven.ts
+        change_type: modify
+        focus:
+          - adapt query filter strategy for custom regex context
+      - path: src/checker.ts
+        change_type: modify
+        focus:
+          - include template rules in version compare/filter flow
+    acceptance_criteria:
+      - can input format name, regex, description, examples, and validate in real time
+      - provides test input and shows match results
+      - custom templates can be saved to localStorage and edited/deleted
+      - custom templates appear in dropdown and are used by real detection flow
+      - supports at least 5 custom templates concurrently
+      - frontend-backend API and query flow can identify and apply selected template
+      - repository input UI is a single field accepting either GitHub URL or owner/repo
+      - repository input does not enforce lowercase conversion
+      - invalid repository input shows English prompt text
+      - backend continues accepting legacy owner/repo body payloads for compatibility
+
+  - task_id: 2e
+    title: Introduce Vitest and add core unit tests (D2)
+    wave: wave-2
+    agent: test-infra-agent
+    dependencies:
+      - 1b
+    parallelizable: true
+    parallelizable_with:
+      - 2a
+      - 2b
+      - 2c
+      - 3a
+    time_estimate: 2h
+    file_changes:
+      - path: package.json
+        change_type: modify
+        focus:
+          - add vitest dependency and test script
+      - path: vitest.config.ts
+        change_type: create
+        focus:
+          - configure ts runtime and test include paths
+      - path: src/__tests__/detector.test.ts
+        change_type: create
+        focus:
+          - cover key parsing and regression cases for 1a/2a
+      - path: src/__tests__/checker.test.ts
+        change_type: create
+        focus:
+          - cover context extraction and version compare cases for 1b/2b
+    acceptance_criteria:
+      - vitest runs locally and passes
+      - key detector/checker regression cases are covered by automated tests
+      - 2e completion serves as Wave 2 quality gate
+
+  - task_id: 3a
+    title: Investigate and fix preloading_tricks repository lookup
+    wave: wave-3
+    agent: investigation-agent
+    dependencies: []
+    parallelizable: true
+    parallelizable_with:
+      - 2a
+      - 2b
+      - 2c
+      - 2d
+      - 2e
+    time_estimate: 2h-3h
+    file_changes:
+      - path: src/repos.ts
+        change_type: modify
+        focus:
+          - inspect fallback repo construction logic and mappings
+      - path: src/checker.ts
+        change_type: modify
+        focus:
+          - improve query strategy and logging under unknown source branch
+    acceptance_criteria:
+      - confirm existence and failure root cause for preloading_tricks
+      - if it exists, query becomes stable; if not, error messages are readable and traceable
+      - investigation records and fix notes are produced
+
+execution_order:
+  critical_path:
+    - 1a
+    - 1b
+    - 2b
+    - 2c
+    - 2d
+  parallel_windows:
+    - window: after-1b
+      runnable:
+        - 2a
+        - 2b
+        - 2e
+        - 3a
+    - window: after-2b
+      runnable:
+        - 2c
+        - 2e
+        - 3a
+    - window: after-2c
+      runnable:
+        - 2d
+        - 2e
+        - 3a
+
+file_change_manifest:
+  required_files:
+    - path: src/detector.ts
+      touched_by:
+        - 1a
+        - 2a
+    - path: src/checker.ts
+      touched_by:
+        - 1b
+        - 2b
+        - 2d
+        - 3a
+    - path: src/dashboard.tsx
+      touched_by:
+        - 2c
+        - 2d
+    - path: public/app.js
+      touched_by:
+        - 2c
+    - path: public/app.css
+      touched_by:
+        - 2c
+    - path: src/types.ts
+      touched_by:
+        - 2c
+        - 2d
+    - path: package.json
+      touched_by:
+        - 2e
+    - path: src/index.tsx
+      touched_by:
+        - 2d
+    - path: src/parser.ts
+      touched_by:
+        - 2d
+    - path: src/sources/maven.ts
+      touched_by:
+        - 2d
+  test_files:
+    - path: src/__tests__/detector.test.ts
+      touched_by:
+        - 2e
+    - path: src/__tests__/checker.test.ts
+      touched_by:
+        - 2e
+    - path: vitest.config.ts
+      touched_by:
+        - 2e
+
+risks_and_mitigations:
+  - risk: Regex extensions may misdetect historical formats
+    mitigation: Lock regression cases in 2e and run full-match tests
+  - risk: Custom regex performance or safety risks (catastrophic backtracking)
+    mitigation: Add length limits, execution timeout protection, or frontend validation prompts
+  - risk: Inconsistent frontend-backend template pass-through fields
+    mitigation: Unify types in src/types.ts and explicitly validate API inputs
+  - risk: Single-field repository input may diverge from legacy owner/repo API callers
+    mitigation: Preserve legacy owner/repo body compatibility and validate both request shapes in API tests
+
+deliverables:
+  - plan.yaml (this file)
+  - Executable implementation and acceptance criteria for 8 tasks
+  - Wave-level sync points and parallel execution windows

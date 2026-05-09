@@ -12,6 +12,16 @@ A Cloudflare Workers dashboard that tracks the version status of all declared de
 - **Version overrides** — per-repo manual overrides stored in KV for packages that need custom version lookup logic
 - **KV caching** — per-dep 1-hour cache; full result 5-minute cache
 
+## Plan Artifacts
+
+Planning and fix documents for the current cycle are stored under:
+
+- plans/20260509-modding-version-parsing/plan.yaml
+- plans/20260509-modding-version-parsing/FIX_PLAN.md
+- plans/20260509-modding-version-parsing/FIX_PLAN_SUMMARY.md
+- plans/20260509-modding-version-parsing/FIX_PLAN_SUMMARY_UPDATED.md
+- plans/20260509-modding-version-parsing/FIX_PLAN_COMPLETE.md
+
 ## Tech Stack
 
 | Layer | Choice |
@@ -119,7 +129,6 @@ src/
   parser.ts       — Gradle build-script / TOML parser
   detector.ts     — Source detection + dep grouping
   github.ts       — GitHub SBOM + file fetch
-  frontend.ts     — Dashboard HTML/CSS/JS (inlined)
   auth.ts         — Token verification
   repos.ts        — Repo list KV operations
   overrides.ts    — Override KV operations
@@ -130,4 +139,7 @@ src/
     maven.ts      — maven-metadata.xml fetch
     modrinth.ts   — Modrinth API v2
     curseforge.ts — CurseForge API v1
+public/
+  app.css         — Dashboard stylesheet
+  app.js          — Dashboard browser logic
 ```

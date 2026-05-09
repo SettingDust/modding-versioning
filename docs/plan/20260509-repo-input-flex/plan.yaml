@@ -1,0 +1,385 @@
+plan_id: 20260509-repo-input-flex
+objective: Add repository input support for GitHub URL or owner/repo with frontend and backend compatibility
+created_at: 2026-05-09
+created_by: gem-planner
+status: pending
+research_confidence: medium
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 7
+  risk_score: medium
+tldr: |
+  Implement a single repository input field in frontend, add robust parsing with English validation errors,
+  extend POST /api/repos to accept repoInput while remaining backward compatible with owner/repo,
+  add route-focused tests, and run full validation via pnpm test + tsc --noEmit.
+open_questions: []
+gaps: []
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: Frontend parser and backend parser normalize input differently, causing false invalid requests
+      likelihood: medium
+      impact: high
+      mitigation: Define one request contract and add shared test cases for URL and owner/repo forms
+    - scenario: Legacy clients break because backend prioritizes new field incorrectly
+      likelihood: low
+      impact: critical
+      mitigation: Keep explicit fallback order and add regression tests for old owner/repo body payload
+  assumptions:
+    - Existing route handler for POST /api/repos is in src/index.tsx and can be safely extended
+    - Existing test stack remains Vitest and is runnable by corepack pnpm test
+implementation_specification:
+  code_structure: Keep parsing logic centralized in backend route helpers and lightweight frontend validators; avoid duplicating regex rules in multiple components
+  affected_areas:
+    - src/dashboard.tsx
+    - src/index.tsx
+    - src/types.ts
+    - src/__tests__/index.api-routes.test.ts
+    - README.md
+  component_details:
+    - component: Frontend repository input
+      responsibility: Provide a single input that accepts GitHub URL or owner/repo and shows English validation errors
+      interfaces:
+        - repoInput: string
+        - validationError: string | null
+      dependencies:
+        - component: Backend POST /api/repos body contract
+          relationship: submits parsed payload and consumes validation response
+      integration_points:
+        - src/dashboard.tsx
+        - src/types.ts
+    - component: Backend repository body resolver
+      responsibility: Parse repoInput and remain compatible with legacy owner/repo payload
+      interfaces:
+        - POST /api/repos body: { repoInput?: string; owner?: string; repo?: string }
+      dependencies:
+        - component: Existing repository lookup/check logic
+          relationship: forwards normalized owner/repo values
+      integration_points:
+        - src/index.tsx
+        - src/__tests__/index.api-routes.test.ts
+contracts:
+  - from_task: T2
+    to_task: T3
+    interface: POST /api/repos request body compatibility
+    format: JSON with repoInput preferred, fallback to owner+repo
+  - from_task: T3
+    to_task: T4
+    interface: Route behavior matrix for valid/invalid/new/legacy body
+    format: Vitest table-driven cases
+  - from_task: T2
+    to_task: T6
+    interface: User-facing input formats and error messages
+    format: README examples in English
+tasks:
+  - id: T1
+    title: Frontend single repository input field
+    description: Replace split owner/repo input UX with one field that accepts either GitHub URL or owner/repo text
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - frontend single input field
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/dashboard.tsx
+        description: Existing repository input form state and submit flow
+      - path: src/types.ts
+        description: Frontend request type definitions
+    diagnosis:
+      root_cause: Current UX requires separate fields and cannot directly consume pasted GitHub repo references
+      fix_recommendations: Consolidate state model to repoInput and defer normalization to parser layer
+      injected_at: 2026-05-09
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial decomposition from user requirement
+        timestamp: 2026-05-09
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 120
+    focus_area: frontend-ux
+    verification:
+      - Manual form interaction in local app confirms single input submission
+    acceptance_criteria:
+      - Dashboard shows one repository input control instead of split owner/repo controls
+      - Existing submit flow still triggers repo check request
+      - Input value preserves user casing (no forced lowercase)
+    failure_modes:
+      - scenario: Submit payload still expects owner/repo and drops repoInput
+        likelihood: medium
+        impact: high
+        mitigation: Update frontend request type and serialization together in one change
+    tech_stack:
+      - TypeScript
+      - React/TSX
+    test_coverage: null
+    research_sources:
+      - plans/20260509-modding-version-parsing/plan.yaml
+
+  - id: T3
+    title: Backend POST /api/repos parse and legacy compatibility
+    description: Extend route body parsing to accept repoInput (GitHub URL or owner/repo) while preserving owner/repo backward compatibility
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - backend POST /api/repos parse and compatibility
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/index.tsx
+        description: API route handlers and request parsing
+      - path: src/repos.ts
+        description: Repository resolution utilities if reused
+    diagnosis:
+      root_cause: Route currently assumes legacy owner/repo shape and lacks direct repoInput parsing
+      fix_recommendations: Add resolver with deterministic fallback order and centralized validation
+      injected_at: 2026-05-09
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial decomposition from user requirement
+        timestamp: 2026-05-09
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 180
+    focus_area: backend-api
+    verification:
+      - New and legacy body payloads both return consistent normalized owner/repo behavior
+    acceptance_criteria:
+      - POST /api/repos accepts repoInput=https://github.com/owner/repo and parses owner/repo correctly
+      - POST /api/repos accepts repoInput=owner/repo and parses owner/repo correctly
+      - POST /api/repos remains compatible with legacy body fields owner+repo
+      - Invalid repoInput returns English error message and non-2xx response
+    failure_modes:
+      - scenario: Ambiguous payload precedence causes incorrect repository selection
+        likelihood: medium
+        impact: high
+        mitigation: Enforce precedence repoInput > owner+repo and document rule
+    tech_stack:
+      - TypeScript
+      - Worker route handlers
+    test_coverage: Route unit tests in Vitest
+    research_sources:
+      - plans/20260509-modding-version-parsing/plan.yaml
+
+  - id: T2
+    title: Frontend parsing and English validation messaging
+    description: Parse user input client-side for quick feedback and show English errors for malformed GitHub URL or owner/repo
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - frontend parsing and English error hints
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T1
+      - T3
+    conflicts_with: []
+    context_files:
+      - path: src/dashboard.tsx
+        description: Form validation and submit UX
+      - path: src/types.ts
+        description: Validation result typing
+    diagnosis:
+      root_cause: Users cannot quickly know whether pasted content is valid before submit
+      fix_recommendations: Add light client parser and clear English error strings aligned with backend rules
+      injected_at: 2026-05-09
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial decomposition from user requirement
+        timestamp: 2026-05-09
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 140
+    focus_area: frontend-validation
+    verification:
+      - Invalid examples render English errors without calling API
+      - Valid input clears errors and submits
+    acceptance_criteria:
+      - Input parser accepts both GitHub URL and owner/repo forms
+      - Invalid input shows English validation text
+      - Validation messages are consistent with backend response semantics
+    failure_modes:
+      - scenario: Client accepts input that backend rejects
+        likelihood: medium
+        impact: medium
+        mitigation: Reuse shared regex/constants or mirror backend test cases on frontend parser
+    tech_stack:
+      - TypeScript
+      - React/TSX
+    test_coverage: null
+    research_sources:
+      - plans/20260509-modding-version-parsing/plan.yaml
+
+  - id: T4
+    title: Route-focused automated tests
+    description: Add or extend API route tests to cover repoInput parsing and legacy compatibility, with minimum coverage on backend route cases
+    wave: 3
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - tests with at least backend route cases
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T2
+      - T3
+    conflicts_with: []
+    context_files:
+      - path: src/__tests__/index.api-routes.test.ts
+        description: API route behavior tests
+    diagnosis:
+      root_cause: New request forms can regress routing/validation behavior without explicit route-level cases
+      fix_recommendations: Use table-driven tests for valid URL, valid owner/repo, legacy body, and invalid payload
+      injected_at: 2026-05-09
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial decomposition from user requirement
+        timestamp: 2026-05-09
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 120
+    focus_area: testing
+    verification:
+      - corepack pnpm vitest run src/__tests__/index.api-routes.test.ts passes
+    acceptance_criteria:
+      - Includes tests for repoInput GitHub URL and owner/repo forms
+      - Includes regression test for legacy owner+repo request body
+      - Includes invalid-input test asserting English error response
+    failure_modes:
+      - scenario: Tests only cover happy path and miss compatibility regressions
+        likelihood: low
+        impact: high
+        mitigation: Require explicit legacy + invalid test cases in acceptance list
+    tech_stack:
+      - Vitest
+      - TypeScript
+    test_coverage: API route unit coverage for POST /api/repos
+    research_sources:
+      - plans/20260509-modding-version-parsing/plan.yaml
+
+  - id: T5
+    title: Full validation run
+    description: Execute full project checks after implementation
+    wave: 4
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - validation commands
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T4
+    conflicts_with: []
+    context_files:
+      - path: package.json
+        description: test scripts
+      - path: tsconfig.json
+        description: TypeScript compile settings
+    diagnosis:
+      root_cause: Feature completion requires final integrated verification beyond route-only tests
+      fix_recommendations: Run required commands in order and record pass/fail
+      injected_at: 2026-05-09
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial decomposition from user requirement
+        timestamp: 2026-05-09
+    estimated_effort: small
+    estimated_files: 0
+    estimated_lines: 0
+    focus_area: verification
+    verification:
+      - corepack pnpm test
+      - corepack pnpm tsc --noEmit
+    acceptance_criteria:
+      - corepack pnpm test passes
+      - corepack pnpm tsc --noEmit passes
+    failure_modes:
+      - scenario: Type-level regressions appear only during full typecheck
+        likelihood: medium
+        impact: medium
+        mitigation: Keep tsc --noEmit as hard gate in final wave
+    tech_stack:
+      - pnpm
+      - TypeScript
+      - Vitest
+    test_coverage: null
+    research_sources:
+      - package.json
+      - tsconfig.json
+
+  - id: T6
+    title: Document new repository input contract
+    description: Update developer-facing docs with accepted input formats and API compatibility notes
+    wave: 4
+    agent: gem-documentation-writer
+    prototype: false
+    covers:
+      - API contract and frontend usage documentation
+    priority: low
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T2
+      - T3
+    conflicts_with: []
+    context_files:
+      - path: README.md
+        description: User/developer usage docs
+    diagnosis:
+      root_cause: Input contract changes can be misused without updated examples
+      fix_recommendations: Add concise examples for URL, owner/repo, and legacy body fallback behavior
+      injected_at: 2026-05-09
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Documentation inclusion for new feature/API task
+        timestamp: 2026-05-09
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 60
+    focus_area: docs
+    verification:
+      - README section includes new examples and compatibility note in English
+    acceptance_criteria:
+      - README includes accepted repository input formats
+      - README documents legacy owner/repo compatibility in POST /api/repos
+    failure_modes:
+      - scenario: Docs diverge from actual validation behavior
+        likelihood: low
+        impact: medium
+        mitigation: Reuse tested examples from T4 in documentation
+    task_type: update
+    audience: developers
+    coverage_matrix:
+      - frontend input format
+      - backend request body compatibility
+      - error message expectations

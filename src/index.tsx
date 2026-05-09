@@ -11,6 +11,7 @@ import { getLatestMavenVersion } from './sources/maven.ts'
 import { getLatestModrinthVersion } from './sources/modrinth.ts'
 import { getLatestCurseForgeVersion } from './sources/curseforge.ts'
 import { renderDashboard } from './dashboard.tsx'
+import { parseGitHubRepoInput } from './parser.ts'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -34,19 +35,35 @@ app.get('/api/repos', async c => {
 app.post('/api/repos', async c => {
   if (!verifyToken(c)) return c.text('Unauthorized', 401)
 
-  let body: { owner?: string; repo?: string }
+  let body: { owner?: string; repo?: string; repoInput?: string }
   try {
     body = await c.req.json()
   } catch {
     return c.text('Invalid JSON', 400)
   }
 
-  const { owner, repo } = body
-  if (
-    typeof owner !== 'string' || !owner.trim() ||
-    typeof repo !== 'string' || !repo.trim()
-  ) {
-    return c.text('owner and repo are required', 400)
+  let owner: string | undefined
+  let repo: string | undefined
+
+  const repoInput = typeof body.repoInput === 'string' ? body.repoInput.trim() : ''
+
+  if (repoInput) {
+    const parsed = parseGitHubRepoInput(repoInput)
+    if (!parsed) return c.text('Repository must be a GitHub URL or owner/repo.', 400)
+    owner = parsed.owner
+    repo = parsed.repo
+  } else {
+    owner = body.owner
+    repo = body.repo
+    if (
+      typeof owner !== 'string' || !owner.trim() ||
+      typeof repo !== 'string' || !repo.trim()
+    ) {
+      return c.text('owner and repo are required', 400)
+    }
+
+    owner = owner.trim()
+    repo = repo.trim()
   }
 
   // Validate owner/repo to safe characters (alphanumeric, hyphens, dots, underscores)
@@ -208,6 +225,8 @@ app.patch('/api/overrides', async c => {
 
   // Invalidate full-result cache so next check picks up the new override
   await c.env.VERSION_CACHE.delete(`result:${owner}/${repo}`)
+  await c.env.VERSION_CACHE.delete(`result:v2:${owner}/${repo}`)
+  await c.env.VERSION_CACHE.delete(`result:v3:${owner}/${repo}`)
 
   return c.json({ ok: true })
 })
